@@ -254,10 +254,19 @@ if not os.path.exists(instance_path):
         instance_path = '/tmp'
 
 # Конфигурация нескольких баз данных
+# Используем pool_pre_ping и pool_recycle для eventlet
+db_uri_base = f'sqlite:///{os.path.join(instance_path, "{name}.db")}'
 app.config['SQLALCHEMY_BINDS'] = {
-    'users': f'sqlite:///{os.path.join(instance_path, "Users.db")}',
-    'groups': f'sqlite:///{os.path.join(instance_path, "Groups.db")}',
-    'chats': f'sqlite:///{os.path.join(instance_path, "Chats.db")}'
+    'users': f'sqlite:///{os.path.join(instance_path, "Users.db")}?check_same_thread=False',
+    'groups': f'sqlite:///{os.path.join(instance_path, "Groups.db")}?check_same_thread=False',
+    'chats': f'sqlite:///{os.path.join(instance_path, "Chats.db")}?check_same_thread=False'
+}
+
+# Настройки пула для eventlet
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'pool_pre_ping': True,
+    'pool_recycle': 300,
+    'connect_args': {'check_same_thread': False}
 }
 
 print(f"[DB] Database path: {instance_path}")
@@ -273,7 +282,10 @@ app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=30)
 db.init_app(app)
 
 jwt = JWTManager(app)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+
+# Используем threading вместо eventlet для избежания конфликтов с SQLAlchemy
+# Или можно использовать gevent, но threading проще
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', logger=True, engineio_logger=True)
 CORS(app)
 
 # Создание таблиц во всех базах данных
