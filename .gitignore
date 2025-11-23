@@ -28,10 +28,8 @@ wheels/
 *.sqlite
 *.sqlite3
 
-# Project specific databases (они будут создаваться автоматически)
-# Users.db
-# Groups.db
-# Chats.db
+# JSON storage files (они будут создаваться автоматически)
+instance/*.json
 
 # IDE
 .vscode/
