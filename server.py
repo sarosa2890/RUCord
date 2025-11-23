@@ -242,12 +242,28 @@ class UserSettings(db.Model):
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'rucord-secret-key-change-in-production')
 
+# Определяем путь для баз данных
+# На Render используем /tmp для временных файлов или создаем instance директорию
+instance_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'instance')
+if not os.path.exists(instance_path):
+    try:
+        os.makedirs(instance_path, exist_ok=True)
+    except Exception as e:
+        print(f"Warning: Could not create instance directory: {e}")
+        # Fallback на /tmp для Render
+        instance_path = '/tmp'
+
 # Конфигурация нескольких баз данных
 app.config['SQLALCHEMY_BINDS'] = {
-    'users': 'sqlite:///Users.db',
-    'groups': 'sqlite:///Groups.db',
-    'chats': 'sqlite:///Chats.db'
+    'users': f'sqlite:///{os.path.join(instance_path, "Users.db")}',
+    'groups': f'sqlite:///{os.path.join(instance_path, "Groups.db")}',
+    'chats': f'sqlite:///{os.path.join(instance_path, "Chats.db")}'
 }
+
+print(f"[DB] Database path: {instance_path}")
+print(f"[DB] Users DB: {app.config['SQLALCHEMY_BINDS']['users']}")
+print(f"[DB] Groups DB: {app.config['SQLALCHEMY_BINDS']['groups']}")
+print(f"[DB] Chats DB: {app.config['SQLALCHEMY_BINDS']['chats']}")
 
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'jwt-secret-key-change-in-production')
@@ -297,50 +313,70 @@ def app_route():
 
 @app.route('/api/register', methods=['POST'])
 def register():
-    data = request.get_json()
-    username = data.get('username')
-    email = data.get('email')
-    password = data.get('password')
-    
-    if not username or not email or not password:
-        return jsonify({'error': 'Все поля обязательны'}), 400
-    
-    if User.query.filter_by(username=username).first():
-        return jsonify({'error': 'Пользователь с таким именем уже существует'}), 400
-    
-    if User.query.filter_by(email=email).first():
-        return jsonify({'error': 'Пользователь с таким email уже существует'}), 400
-    
-    user = User(username=username, email=email)
-    user.set_password(password)
-    db.session.add(user)
-    db.session.commit()
-    
-    access_token = create_access_token(identity=user.id)
-    return jsonify({
-        'token': access_token,
-        'user': user.to_dict()
-    }), 201
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'Invalid JSON'}), 400
+            
+        username = data.get('username')
+        email = data.get('email')
+        password = data.get('password')
+        
+        if not username or not email or not password:
+            return jsonify({'error': 'Все поля обязательны'}), 400
+        
+        if User.query.filter_by(username=username).first():
+            return jsonify({'error': 'Пользователь с таким именем уже существует'}), 400
+        
+        if User.query.filter_by(email=email).first():
+            return jsonify({'error': 'Пользователь с таким email уже существует'}), 400
+        
+        user = User(username=username, email=email)
+        user.set_password(password)
+        db.session.add(user)
+        db.session.commit()
+        
+        access_token = create_access_token(identity=user.id)
+        return jsonify({
+            'token': access_token,
+            'user': user.to_dict()
+        }), 201
+    except Exception as e:
+        import traceback
+        error_msg = str(e)
+        traceback.print_exc()
+        print(f"[ERROR] Register error: {error_msg}")
+        return jsonify({'error': f'Server error: {error_msg}'}), 500
 
 @app.route('/api/login', methods=['POST'])
 def login():
-    data = request.get_json()
-    username = data.get('username')
-    password = data.get('password')
-    
-    if not username or not password:
-        return jsonify({'error': 'Имя пользователя и пароль обязательны'}), 400
-    
-    user = User.query.filter_by(username=username).first()
-    
-    if not user or not user.check_password(password):
-        return jsonify({'error': 'Неверное имя пользователя или пароль'}), 401
-    
-    access_token = create_access_token(identity=user.id)
-    return jsonify({
-        'token': access_token,
-        'user': user.to_dict()
-    }), 200
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'Invalid JSON'}), 400
+            
+        username = data.get('username')
+        password = data.get('password')
+        
+        if not username or not password:
+            return jsonify({'error': 'Имя пользователя и пароль обязательны'}), 400
+        
+        user = User.query.filter_by(username=username).first()
+        
+        if not user or not user.check_password(password):
+            return jsonify({'error': 'Неверное имя пользователя или пароль'}), 401
+        
+        access_token = create_access_token(identity=user.id)
+        return jsonify({
+            'token': access_token,
+            'user': user.to_dict()
+        }), 200
+    except Exception as e:
+        import traceback
+        error_msg = str(e)
+        traceback.print_exc()
+        print(f"[ERROR] Login error: {error_msg}")
+        return jsonify({'error': f'Server error: {error_msg}'}), 500
 
 @app.route('/api/me', methods=['GET'])
 @jwt_required()
