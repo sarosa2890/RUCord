@@ -3,6 +3,7 @@ from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy.pool import NullPool
 from datetime import datetime, timedelta
 import os
 import bcrypt
@@ -262,8 +263,9 @@ app.config['SQLALCHEMY_BINDS'] = {
 }
 
 # Настройки для работы с threading
+# Используем NullPool для SQLite, чтобы избежать проблем с блокировками в многопоточной среде
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    'pool_pre_ping': True,
+    'poolclass': NullPool,
     'connect_args': {'check_same_thread': False}
 }
 
