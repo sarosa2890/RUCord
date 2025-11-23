@@ -383,6 +383,7 @@ def register():
             'user': user.to_dict()
         }), 201
     except Exception as e:
+        db.session.rollback()
         import traceback
         error_msg = str(e)
         traceback.print_exc()
@@ -428,6 +429,7 @@ def login():
             'user': user.to_dict()
         }), 200
     except Exception as e:
+        db.session.rollback()
         import traceback
         error_msg = str(e)
         error_traceback = traceback.format_exc()
