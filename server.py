@@ -277,24 +277,37 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 CORS(app)
 
 # Создание таблиц во всех базах данных
-with app.app_context():
-    db.create_all(bind_key='users')
-    db.create_all(bind_key='groups')
-    db.create_all(bind_key='chats')
-    
-    # Создание тестового пользователя если не существует
-    if not User.query.filter_by(username='admin').first():
-        admin = User(username='admin', email='admin@rucord.com')
-        admin.set_password('admin123')
-        admin.status = 'online'
-        db.session.add(admin)
-        db.session.commit()
+try:
+    with app.app_context():
+        print("[DB] Creating database tables...")
+        db.create_all(bind_key='users')
+        print("[DB] Users tables created")
+        db.create_all(bind_key='groups')
+        print("[DB] Groups tables created")
+        db.create_all(bind_key='chats')
+        print("[DB] Chats tables created")
         
-        # Создаем настройки для admin
-        if not UserSettings.query.filter_by(user_id=admin.id).first():
-            settings = UserSettings(user_id=admin.id)
-            db.session.add(settings)
+        # Создание тестового пользователя если не существует
+        if not User.query.filter_by(username='admin').first():
+            print("[DB] Creating admin user...")
+            admin = User(username='admin', email='admin@rucord.com')
+            admin.set_password('admin123')
+            admin.status = 'online'
+            db.session.add(admin)
             db.session.commit()
+            
+            # Создаем настройки для admin
+            if not UserSettings.query.filter_by(user_id=admin.id).first():
+                settings = UserSettings(user_id=admin.id)
+                db.session.add(settings)
+                db.session.commit()
+            print("[DB] Admin user created successfully")
+        else:
+            print("[DB] Admin user already exists")
+except Exception as e:
+    import traceback
+    print(f"[DB ERROR] Failed to initialize databases: {e}")
+    traceback.print_exc()
 
 # ==================== API Routes ====================
 
