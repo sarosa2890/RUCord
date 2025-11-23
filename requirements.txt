@@ -7,4 +7,5 @@ bcrypt==4.1.1
 python-socketio==5.10.0
 eventlet==0.33.3
 PyJWT==2.8.0
+flask_sqlalchemy
 
