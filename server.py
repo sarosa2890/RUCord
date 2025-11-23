@@ -15,7 +15,7 @@ app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'jwt-secret-key-
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=30)
 
 jwt = JWTManager(app)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', logger=True, engineio_logger=True)
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', logger=True, engineio_logger=True)
 CORS(app)
 
 # Helper function to get user from token
