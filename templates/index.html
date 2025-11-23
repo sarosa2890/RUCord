@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RUCord</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- Loader (Индикатор загрузки) -->
+    <div id="pageLoader" class="page-loader">
+        <div class="loader"></div>
+    </div>
+    
+    <!-- Landing Page (Главная страница как у Discord) -->
+    <div id="landingPage" class="landing-page">
+        <div class="landing-header">
+            <div class="landing-logo">
+                <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+                    <circle cx="20" cy="20" r="18" fill="#5865f2"/>
+                    <path d="M15 15 L25 25 M25 15 L15 25" stroke="white" stroke-width="3" stroke-linecap="round"/>
+                </svg>
+                <span class="landing-logo-text">RUCord</span>
+            </div>
+            <nav class="landing-nav">
+                <a href="#features" class="nav-link">Функции</a>
+                <a href="#about" class="nav-link">О нас</a>
+            </nav>
+            <div class="landing-auth-buttons">
+                <button id="openLoginBtn" class="btn-secondary">Войти</button>
+                <button id="openRegisterBtn" class="btn-primary-small">Открыть RUCord</button>
+            </div>
+        </div>
+        
+        <div class="landing-hero">
+            <div class="hero-content">
+                <h1 class="hero-title">Ваше место для общения</h1>
+                <p class="hero-description">
+                    RUCord — это простой способ общаться каждый день и чаще собираться вместе.
+                </p>
+                <div class="hero-buttons">
+                    <button id="heroDownloadBtn" class="btn-primary-large">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
+                        </svg>
+                        Скачать для Windows
+                    </button>
+                    <button id="heroOpenBrowserBtn" class="btn-secondary-large">Открыть RUCord в браузере</button>
+                </div>
+            </div>
+            <div class="hero-image">
+                <div class="hero-mockup">
+                    <div class="mockup-sidebar"></div>
+                    <div class="mockup-chat"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Auth Modal (Discord-style) -->
+    <div id="authModal" class="auth-modal" style="display: none;">
+        <div class="auth-modal-backdrop"></div>
+        <div class="auth-modal-container">
+            <div class="auth-modal-content">
+                <div class="auth-close-btn" id="closeAuthModal">✕</div>
+                <div class="auth-header">
+                    <h2 class="auth-title">Добро пожаловать обратно!</h2>
+                    <p class="auth-subtitle">Мы так рады снова вас видеть!</p>
+                </div>
+                
+                <!-- Login Form -->
+                <form id="loginForm" class="auth-form active">
+                    <div class="form-group">
+                        <label class="form-label">EMAIL ИЛИ НОМЕР ТЕЛЕФОНА</label>
+                        <input type="text" id="loginUsername" class="form-input" placeholder="Введите имя пользователя" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">ПАРОЛЬ</label>
+                        <input type="password" id="loginPassword" class="form-input" placeholder="Введите пароль" required>
+                        <a href="#" class="form-link">Забыли пароль?</a>
+                    </div>
+                    <button type="submit" class="btn-primary-full">Войти</button>
+                    <div id="loginError" class="error-message"></div>
+                    <div class="auth-divider">
+                        <span>Нужен аккаунт?</span>
+                        <a href="#" id="switchToRegister" class="form-link">Зарегистрироваться</a>
+                    </div>
+                </form>
+                
+                <!-- Register Form -->
+                <form id="registerForm" class="auth-form">
+                    <div class="form-group">
+                        <label class="form-label">ИМЯ ПОЛЬЗОВАТЕЛЯ</label>
+                        <input type="text" id="registerUsername" class="form-input" placeholder="Введите имя пользователя" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">EMAIL</label>
+                        <input type="email" id="registerEmail" class="form-input" placeholder="Введите email" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">ПАРОЛЬ</label>
+                        <input type="password" id="registerPassword" class="form-input" placeholder="Введите пароль" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">ДАТА РОЖДЕНИЯ</label>
+                        <div class="date-inputs">
+                            <select id="registerDay" class="form-select">
+                                <option>День</option>
+                            </select>
+                            <select id="registerMonth" class="form-select">
+                                <option>Месяц</option>
+                            </select>
+                            <select id="registerYear" class="form-select">
+                                <option>Год</option>
+                            </select>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn-primary-full">Создать аккаунт</button>
+                    <div id="registerError" class="error-message"></div>
+                    <div class="auth-divider">
+                        <span>Уже есть аккаунт?</span>
+                        <a href="#" id="switchToLogin" class="form-link">Войти</a>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main App -->
+    <div id="app" class="app-container" style="display: none;">
+        <!-- Server List Sidebar -->
+        <div class="server-sidebar">
+            <div class="server-icon home-server" title="Главная">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2L2 7v10c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V7l-10-5z"/>
+                </svg>
+            </div>
+            <div id="serversList" class="servers-list"></div>
+            <button id="addServerBtn" class="server-icon add-server" title="Добавить сервер">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+                </svg>
+            </button>
+        </div>
+
+        <!-- Channel/Friends Sidebar (Точно как Discord) -->
+        <div class="channel-sidebar">
+            <!-- Home View (Friends/DM) - ТОЧНО КАК DISCORD -->
+            <div id="homeView" class="sidebar-view active">
+                <!-- Top Search Bar -->
+                <div class="friends-search-container">
+                    <input type="text" id="friendsSearchInput" class="friends-search-input" placeholder="Найти или начать беседу">
+                    <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                    </svg>
+                </div>
+                
+                <!-- Friends Tabs (ТОЧНО КАК DISCORD) -->
+                <div class="friends-tabs-container">
+                    <div class="friends-tabs">
+                        <button class="friends-tab active" data-tab="friends">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/>
+                            </svg>
+                            Друзья
+                        </button>
+                        <button class="friends-tab" data-tab="online">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                                <circle cx="12" cy="12" r="10"/>
+                            </svg>
+                            В сети
+                        </button>
+                        <button class="friends-tab" data-tab="all">
+                            Все
+                        </button>
+                        <button class="friends-tab" data-tab="pending">
+                            Ожидание
+                        </button>
+                    </div>
+                    <button id="addFriendBtn" class="btn-add-friend">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+                        </svg>
+                        Добавить в друзья
+                    </button>
+                </div>
+                
+                <!-- Friends Content -->
+                <div id="friendsTabContent" class="friends-tab-content active">
+                    <div class="friends-categories">
+                        <div class="friends-category">
+                            <div class="category-header">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z"/>
+                                </svg>
+                                <span>Друзья</span>
+                            </div>
+                            <div class="category-items">
+                                <div class="category-item">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+                                    </svg>
+                                    Nitro
+                                </div>
+                                <div class="category-item">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                                        <path d="M7 18c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zM1 2v2h2l3.6 7.59-1.35 2.45c-.15.28-.25.61-.25.96 0 1.1.9 2 2 2h12v-2H7.42c-.14 0-.25-.11-.25-.25l.03-.12L8.1 13h7.45c.75 0 1.41-.41 1.75-1.03L21.7 4H5.21l-.94-2H1zm16 16c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/>
+                                    </svg>
+                                    Магазин
+                                    <span class="badge-new">НОВОЕ</span>
+                                </div>
+                                <div class="category-item">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                                        <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/>
+                                    </svg>
+                                    Задания
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="friends-category">
+                            <div class="category-header">
+                                <span>Личные сообщения</span>
+                                <button class="category-action-btn" id="newDMBtn" title="Создать группу">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                                        <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+                                    </svg>
+                                </button>
+                            </div>
+                            <div id="dmChannelsList" class="dm-list"></div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Online Tab Content -->
+                <div id="onlineTabContent" class="friends-tab-content">
+                    <div id="friendsOnlineList" class="friends-list-main"></div>
+                </div>
+                
+                <!-- All Tab Content -->
+                <div id="allTabContent" class="friends-tab-content">
+                    <div id="friendsAllList" class="friends-list-main"></div>
+                </div>
+                
+                <!-- Pending Tab Content -->
+                <div id="pendingTabContent" class="friends-tab-content">
+                    <div id="friendsPendingList" class="friends-list-main"></div>
+                </div>
+            </div>
+
+            <!-- Server View -->
+            <div id="serverView" class="sidebar-view">
+                <div id="serverHeader" class="server-header">
+                    <h2 id="serverName">Выберите сервер</h2>
+                    <button id="serverMenuBtn" class="menu-btn">⋮</button>
+                </div>
+                <div id="channelsList" class="channels-list">
+                    <p class="empty-state">Выберите сервер для просмотра каналов</p>
+                </div>
+            </div>
+
+            <div id="userInfo" class="user-info">
+                <div class="user-avatar" id="userAvatarContainer">
+                    <span id="userInitial">?</span>
+                    <span class="status-indicator" id="userStatusIndicator"></span>
+                </div>
+                <div class="user-details">
+                    <div id="userName" class="username">Пользователь</div>
+                    <div class="user-id" id="userId">#0000</div>
+                </div>
+                <div class="user-actions">
+                    <button id="microphoneBtn" class="action-btn" title="Микрофон">🎤</button>
+                    <button id="headphonesBtn" class="action-btn" title="Наушники">🎧</button>
+                    <button id="userMenuBtn" class="menu-btn">⋮</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Friends/DM Sidebar (right) -->
+        <div id="membersSidebar" class="members-sidebar" style="display: none;">
+            <div class="members-header">
+                <h3 id="membersTitle">Участники</h3>
+                <button id="closeMembersBtn" class="close-btn">✕</button>
+            </div>
+            <div id="membersList" class="members-list"></div>
+        </div>
+
+        <!-- Main Chat Area (ТОЧНО КАК DISCORD) -->
+        <div class="chat-area">
+            <!-- Friends List View (Центральная панель) -->
+            <div id="friendsMainView" class="friends-main-view">
+                <!-- Top Banner -->
+                <div class="friends-banner">
+                    <span>Ищете пользователей, которых вы заблокировали или игнорируете?</span>
+                    <a href="#" class="banner-link">Перейти в настройки</a>
+                </div>
+                
+                <!-- Search Bar -->
+                <div class="friends-main-search">
+                    <svg class="search-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                    </svg>
+                    <input type="text" placeholder="Поиск" class="friends-main-search-input">
+                </div>
+                
+                <!-- Friends Sections -->
+                <div id="friendsMainList" class="friends-main-list">
+                    <div id="friendsOnlineSection" class="friends-main-section">
+                        <div class="friends-main-section-header">
+                            В сети — <span id="friendsOnlineCount">0</span>
+                        </div>
+                        <div id="friendsOnlineMainList" class="friends-main-list-items"></div>
+                    </div>
+                    
+                    <div id="friendsOfflineSection" class="friends-main-section">
+                        <div class="friends-main-section-header">
+                            Не в сети — <span id="friendsOfflineCount">0</span>
+                        </div>
+                        <div id="friendsOfflineMainList" class="friends-main-list-items"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Chat View (для каналов и DM) -->
+            <div id="chatView" class="chat-view" style="display: none;">
+                <div id="channelHeader" class="channel-header">
+                    <div class="header-left">
+                        <span id="channelIcon">#</span>
+                        <h3 id="channelName">выберите канал</h3>
+                    </div>
+                    <div class="header-actions">
+                        <button id="callBtn" class="header-btn" title="Голосовой звонок">📞</button>
+                        <button id="videoCallBtn" class="header-btn" title="Видеозвонок">📹</button>
+                        <button id="membersToggleBtn" class="header-btn" title="Список участников">👥</button>
+                        <button id="channelInfoBtn" class="header-btn" title="Информация о канале">ℹ</button>
+                    </div>
+                </div>
+                
+                <div id="messagesContainer" class="messages-container">
+                    <div class="empty-state">
+                        <h2>Добро пожаловать в RUCord!</h2>
+                        <p>Выберите канал или друга, чтобы начать общение</p>
+                    </div>
+                </div>
+                
+                <div id="messageInputContainer" class="message-input-container" style="display: none;">
+                    <form id="messageForm" class="message-form">
+                        <input type="text" id="messageInput" placeholder="Написать сообщение..." autocomplete="off">
+                        <button type="submit" class="send-btn">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                            </svg>
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Active Contacts Sidebar (Правая панель) -->
+        <div id="activeContactsSidebar" class="active-contacts-sidebar">
+            <div class="active-contacts-header">
+                <h3>Активные контакты</h3>
+                <button id="addFriendBtnFromContacts" class="active-contacts-add-btn" title="Добавить друга">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+                    </svg>
+                </button>
+            </div>
+            <div id="activeContactsList" class="active-contacts-list">
+                <p class="empty-state">Нет активных контактов</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create Server Modal -->
+    <div id="createServerModal" class="modal" style="display: none;">
+        <div class="modal-content small">
+            <h2>Создать сервер</h2>
+            <form id="createServerForm">
+                <div class="form-group">
+                    <label>Название сервера</label>
+                    <input type="text" id="serverNameInput" required placeholder="Мой крутой сервер">
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn-secondary" id="cancelServerBtn">Отмена</button>
+                    <button type="submit" class="btn-primary">Создать</button>
+                </div>
+                <div id="serverError" class="error-message"></div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Create Channel Modal -->
+    <div id="createChannelModal" class="modal" style="display: none;">
+        <div class="modal-content small">
+            <h2>Создать канал</h2>
+            <form id="createChannelForm">
+                <div class="form-group">
+                    <label>Название канала</label>
+                    <input type="text" id="channelNameInput" required placeholder="общий-чат">
+                </div>
+                <div class="form-group">
+                    <label>Тип канала</label>
+                    <select id="channelTypeInput">
+                        <option value="text">Текстовый</option>
+                        <option value="voice">Голосовой</option>
+                    </select>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn-secondary" id="cancelChannelBtn">Отмена</button>
+                    <button type="submit" class="btn-primary">Создать</button>
+                </div>
+                <div id="channelError" class="error-message"></div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Add Friend Modal -->
+    <div id="addFriendModal" class="modal" style="display: none;">
+        <div class="modal-content small">
+            <h2>Добавить друга</h2>
+            <form id="addFriendForm">
+                <div class="form-group">
+                    <label>Имя пользователя</label>
+                    <input type="text" id="friendUsernameInput" required placeholder="Введите имя пользователя" autocomplete="off">
+                    <div id="userSearchResults" class="search-results"></div>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn-secondary" id="cancelFriendBtn">Отмена</button>
+                    <button type="submit" class="btn-primary">Отправить запрос</button>
+                </div>
+                <div id="friendError" class="error-message"></div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Friend Requests Modal -->
+    <div id="friendRequestsModal" class="modal" style="display: none;">
+        <div class="modal-content small">
+            <h2>Запросы в друзья</h2>
+            <div id="friendRequestsTabs" class="tabs">
+                <button class="tab-btn active" data-tab="incoming">Входящие</button>
+                <button class="tab-btn" data-tab="outgoing">Исходящие</button>
+            </div>
+            <div id="incomingRequests" class="requests-list">
+                <p class="empty-state">Нет входящих запросов</p>
+            </div>
+            <div id="outgoingRequests" class="requests-list" style="display: none;">
+                <p class="empty-state">Нет исходящих запросов</p>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn-secondary" id="closeRequestsBtn">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Modal (Discord-style) -->
+    <div id="settingsModal" class="settings-modal" style="display: none;">
+        <div class="settings-backdrop" id="closeSettingsBackdrop"></div>
+        <div class="settings-container">
+            <div class="settings-sidebar">
+                <div class="settings-header">
+                    <h2>Настройки пользователя</h2>
+                    <button class="settings-close-btn" id="closeSettingsBtn">✕</button>
+                </div>
+                <nav class="settings-nav">
+                    <button class="settings-nav-item active" data-tab="account">
+                        <span>Аккаунт</span>
+                    </button>
+                    <button class="settings-nav-item" data-tab="appearance">
+                        <span>Внешний вид</span>
+                    </button>
+                    <button class="settings-nav-item" data-tab="notifications">
+                        <span>Уведомления</span>
+                    </button>
+                </nav>
+            </div>
+            <div class="settings-content-wrapper">
+                <div id="accountSettings" class="settings-section active">
+                    <h3 class="settings-section-title">Мой аккаунт</h3>
+                    <div class="settings-section-content">
+                        <div class="form-group">
+                            <label class="form-label">ИМЯ ПОЛЬЗОВАТЕЛЯ</label>
+                            <input type="text" id="settingsUsername" class="form-input" readonly>
+                            <p class="form-hint">Имя пользователя нельзя изменить</p>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">EMAIL</label>
+                            <input type="email" id="settingsEmail" class="form-input" readonly>
+                            <p class="form-hint">Email нельзя изменить</p>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">СТАТУС</label>
+                            <select id="settingsStatus" class="form-select">
+                                <option value="online">В сети</option>
+                                <option value="idle">Не активен</option>
+                                <option value="dnd">Не беспокоить</option>
+                                <option value="offline">Не в сети</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">СООБЩЕНИЕ О СТАТУСЕ</label>
+                            <input type="text" id="settingsStatusMessage" class="form-input" placeholder="Что вы делаете?">
+                        </div>
+                    </div>
+                </div>
+                <div id="appearanceSettings" class="settings-section">
+                    <h3 class="settings-section-title">Внешний вид</h3>
+                    <div class="settings-section-content">
+                        <div class="form-group">
+                            <label class="form-label">ТЕМА</label>
+                            <select id="settingsTheme" class="form-select">
+                                <option value="dark">Темная</option>
+                                <option value="light">Светлая</option>
+                            </select>
+                            <p class="form-hint">Выберите предпочитаемую тему оформления</p>
+                        </div>
+                    </div>
+                </div>
+                <div id="notificationsSettings" class="settings-section">
+                    <h3 class="settings-section-title">Уведомления</h3>
+                    <div class="settings-section-content">
+                        <div class="settings-checkbox-group">
+                            <label class="settings-checkbox-label">
+                                <input type="checkbox" id="settingsNotifications" class="settings-checkbox">
+                                <span class="settings-checkbox-text">
+                                    <strong>Включить уведомления</strong>
+                                    <span class="settings-checkbox-desc">Получать уведомления о новых сообщениях</span>
+                                </span>
+                            </label>
+                        </div>
+                        <div class="settings-checkbox-group">
+                            <label class="settings-checkbox-label">
+                                <input type="checkbox" id="settingsSound" class="settings-checkbox">
+                                <span class="settings-checkbox-text">
+                                    <strong>Звуковые уведомления</strong>
+                                    <span class="settings-checkbox-desc">Воспроизводить звук при получении сообщений</span>
+                                </span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                <div class="settings-footer">
+                    <button type="button" class="btn-primary" id="saveSettingsBtn">Сохранить изменения</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Call Modal (Звонок/Видеозвонок) -->
+    <div id="callModal" class="call-modal" style="display: none;">
+        <div class="call-container">
+            <div class="call-header">
+                <div class="call-user-info">
+                    <div class="call-avatar" id="callAvatar"></div>
+                    <div class="call-user-name" id="callUserName">Имя пользователя</div>
+                    <div class="call-status" id="callStatus">Вызов...</div>
+                </div>
+            </div>
+            
+            <div class="call-content">
+                <div class="call-video-container">
+                    <video id="localVideo" autoplay playsinline muted style="display: none;"></video>
+                    <video id="remoteVideo" autoplay playsinline muted="false" style="display: none;"></video>
+                    <div id="callPlaceholder" class="call-placeholder">
+                        <div class="call-placeholder-avatar" id="callPlaceholderAvatar"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="call-controls">
+                <button class="call-control-btn mute-btn" id="muteBtn" title="Отключить микрофон">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                        <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+                    </svg>
+                </button>
+                <button class="call-control-btn video-btn" id="videoToggleBtn" title="Выключить камеру">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/>
+                    </svg>
+                </button>
+                <button class="call-control-btn screen-btn" id="screenShareBtn" title="Демонстрация экрана">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M20 18c1.1 0 1.99-.9 1.99-2L22 6c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2H0v2h24v-2h-4zM4 6h16v10H4V6z"/>
+                    </svg>
+                </button>
+                <button class="call-control-btn settings-btn" id="callSettingsBtn" title="Настройки звука">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.07-0.94l2.03-1.58c0.18-0.14,0.23-0.41,0.12-0.61 l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81c-0.04-0.24-0.24-0.41-0.48-0.41 h-3.84c-0.24,0-0.43,0.17-0.47,0.41L9.25,5.35C8.66,5.59,8.12,5.92,7.63,6.29L5.24,5.33c-0.22-0.08-0.47,0-0.59,0.22L2.74,8.87 C2.62,9.08,2.66,9.34,2.86,9.48l2.03,1.58C4.84,11.36,4.8,11.69,4.8,12s0.02,0.64,0.07,0.94l-2.03,1.58 c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54 c0.05,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.44-0.17,0.47-0.41l0.36-2.54c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96 c0.22,0.08,0.47,0,0.59-0.22l1.92-3.32c0.12-0.22,0.07-0.47-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6 s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z"/>
+                    </svg>
+                </button>
+                <button class="call-control-btn end-call-btn" id="endCallBtn" title="Завершить звонок">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.69.28-.26 0-.51-.1-.69-.28L.28 13.55c-.18-.18-.28-.43-.28-.69s.1-.51.28-.69C3.34 8.78 7.46 7 12 7s8.66 1.78 11.72 5.17c.18.18.28.43.28.69s-.1.51-.28.69l-2.48 2.48c-.18.18-.43.28-.69.28-.26 0-.51-.1-.69-.28-.79-.73-1.68-1.36-2.66-1.85-.33-.16-.56-.51-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/>
+                    </svg>
+                </button>
+            </div>
+            
+            <!-- Call Settings Panel -->
+            <div id="callSettingsPanel" class="call-settings-panel" style="display: none;">
+                <div class="call-settings-header">
+                    <h3>Настройки звука</h3>
+                    <button id="closeCallSettingsBtn" class="close-call-settings-btn">✕</button>
+                </div>
+                <div class="call-settings-content">
+                    <div class="call-settings-group">
+                        <label class="call-settings-label">Громкость вывода (динамики/наушники)</label>
+                        <div class="call-settings-control">
+                            <input type="range" id="outputVolumeSlider" min="0" max="100" value="100" class="volume-slider">
+                            <span id="outputVolumeValue" class="volume-value">100%</span>
+                        </div>
+                    </div>
+                    <div class="call-settings-group">
+                        <label class="call-settings-label">Устройство вывода</label>
+                        <select id="outputDeviceSelect" class="call-settings-select"></select>
+                    </div>
+                    <div class="call-settings-group">
+                        <label class="call-settings-label">Громкость ввода (микрофон)</label>
+                        <div class="call-settings-control">
+                            <input type="range" id="inputVolumeSlider" min="0" max="100" value="100" class="volume-slider">
+                            <span id="inputVolumeValue" class="volume-value">100%</span>
+                        </div>
+                    </div>
+                    <div class="call-settings-group">
+                        <label class="call-settings-label">Устройство ввода</label>
+                        <select id="inputDeviceSelect" class="call-settings-select"></select>
+                    </div>
+                    <div class="call-settings-group">
+                        <button id="testAudioBtn" class="call-settings-test-btn">Тест звука</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
+
