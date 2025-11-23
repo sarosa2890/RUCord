@@ -1155,9 +1155,11 @@ def on_call_ice_candidate(data):
         }, room=user_room)
 
 if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    debug = os.environ.get('FLASK_ENV') == 'development'
     print("=" * 50)
-    print("RUCord сервер запущен на http://localhost:5000")
+    print(f"RUCord сервер запущен на http://0.0.0.0:{port}")
     print("Тестовый пользователь: admin / admin123")
     print("=" * 50)
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True, allow_unsafe_werkzeug=True)
+    socketio.run(app, host='0.0.0.0', port=port, debug=debug, allow_unsafe_werkzeug=True)
 
