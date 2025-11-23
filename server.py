@@ -1154,6 +1154,8 @@ def on_call_ice_candidate(data):
             'candidate': candidate
         }, room=user_room)
 
+# Для production используем gunicorn через Procfile
+# Для локальной разработки запускаем через if __name__ == '__main__'
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     debug = os.environ.get('FLASK_ENV') == 'development'
