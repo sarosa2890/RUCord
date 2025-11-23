@@ -4,10 +4,7 @@ JSON-based storage system for RUCord
 import json
 import os
 from datetime import datetime
-try:
-    from eventlet import lock as Lock
-except ImportError:
-    from threading import Lock
+from threading import Lock
 import bcrypt
 
 class JSONStorage:
