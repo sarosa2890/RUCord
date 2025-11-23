@@ -2,293 +2,64 @@ from flask import Flask, render_template, request, jsonify, session
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
-from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy.pool import NullPool
 from datetime import datetime, timedelta
 import os
-import bcrypt
-
-# ==================== DATABASE MODELS ====================
-
-# Один экземпляр SQLAlchemy для всех баз данных
-db = SQLAlchemy()
-
-class User(db.Model):
-    __tablename__ = 'users'
-    __bind_key__ = 'users'
-    
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(80), unique=True, nullable=False)
-    email = db.Column(db.String(120), unique=True, nullable=False)
-    password_hash = db.Column(db.String(255), nullable=False)
-    avatar = db.Column(db.String(255), default='default_avatar.png')
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
-    status = db.Column(db.String(20), default='offline')  # online, idle, dnd, offline
-    status_message = db.Column(db.String(200), nullable=True)
-    
-    def set_password(self, password):
-        self.password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-    
-    def check_password(self, password):
-        return bcrypt.checkpw(password.encode('utf-8'), self.password_hash.encode('utf-8'))
-    
-    def to_dict(self, include_email=False):
-        data = {
-            'id': self.id,
-            'username': self.username,
-            'avatar': self.avatar,
-            'status': self.status,
-            'status_message': self.status_message,
-            'created_at': self.created_at.isoformat()
-        }
-        if include_email:
-            data['email'] = self.email
-        return data
-
-class Server(db.Model):
-    __tablename__ = 'servers'
-    __bind_key__ = 'groups'
-    
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), nullable=False)
-    icon = db.Column(db.String(255), default='default_server.png')
-    owner_id = db.Column(db.Integer, nullable=False)  # Без FK, так как в другой БД
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
-    # Отношения (без cascade, так как в разных БД)
-    members = db.relationship('ServerMember', back_populates='server', cascade='all, delete-orphan')
-    channels = db.relationship('Channel', back_populates='server', cascade='all, delete-orphan')
-    
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'name': self.name,
-            'icon': self.icon,
-            'owner_id': self.owner_id,
-            'created_at': self.created_at.isoformat(),
-            'member_count': len(self.members),
-            'channel_count': len(self.channels)
-        }
-
-class ServerMember(db.Model):
-    __tablename__ = 'server_members'
-    __bind_key__ = 'groups'
-    
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, nullable=False)  # Без FK
-    server_id = db.Column(db.Integer, db.ForeignKey('servers.id'), nullable=False)
-    role = db.Column(db.String(20), default='member')  # owner, admin, member
-    joined_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
-    # Отношения
-    server = db.relationship('Server', back_populates='members')
-    
-    __table_args__ = (db.UniqueConstraint('user_id', 'server_id', name='unique_server_member'),)
-    
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'user_id': self.user_id,
-            'server_id': self.server_id,
-            'role': self.role,
-            'joined_at': self.joined_at.isoformat()
-        }
-
-class Channel(db.Model):
-    __tablename__ = 'channels'
-    __bind_key__ = 'groups'
-    
-    id = db.Column(db.Integer, primary_key=True)
-    server_id = db.Column(db.Integer, db.ForeignKey('servers.id'), nullable=False)
-    name = db.Column(db.String(100), nullable=False)
-    type = db.Column(db.String(20), default='text')  # text, voice
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
-    # Отношения
-    server = db.relationship('Server', back_populates='channels')
-    
-    def to_dict(self):
-        # Подсчет сообщений из другой БД - упрощенная версия
-        return {
-            'id': self.id,
-            'server_id': self.server_id,
-            'name': self.name,
-            'type': self.type,
-            'created_at': self.created_at.isoformat(),
-            'message_count': 0  # Будет подсчитываться отдельно
-        }
-
-class Message(db.Model):
-    __tablename__ = 'messages'
-    __bind_key__ = 'chats'
-    
-    id = db.Column(db.Integer, primary_key=True)
-    channel_id = db.Column(db.Integer, nullable=True)  # Без FK
-    dm_channel_id = db.Column(db.Integer, db.ForeignKey('dm_channels.id'), nullable=True)
-    user_id = db.Column(db.Integer, nullable=False)  # Без FK
-    content = db.Column(db.Text, nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    edited_at = db.Column(db.DateTime, nullable=True)
-    
-    # Отношения
-    dm_channel = db.relationship('DMChannel', back_populates='messages')
-    
-    def to_dict(self):
-        # user будет добавляться отдельно в server.py
-        return {
-            'id': self.id,
-            'channel_id': self.channel_id,
-            'dm_channel_id': self.dm_channel_id,
-            'user_id': self.user_id,
-            'content': self.content,
-            'created_at': self.created_at.isoformat(),
-            'edited_at': self.edited_at.isoformat() if self.edited_at else None
-        }
-
-class FriendRequest(db.Model):
-    __tablename__ = 'friend_requests'
-    __bind_key__ = 'chats'
-    
-    id = db.Column(db.Integer, primary_key=True)
-    from_user_id = db.Column(db.Integer, nullable=False)  # Без FK
-    to_user_id = db.Column(db.Integer, nullable=False)  # Без FK
-    status = db.Column(db.String(20), default='pending')  # pending, accepted, declined
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
-    __table_args__ = (db.UniqueConstraint('from_user_id', 'to_user_id', name='unique_friend_request'),)
-    
-    def to_dict(self):
-        # users будут добавляться отдельно в server.py
-        return {
-            'id': self.id,
-            'from_user_id': self.from_user_id,
-            'to_user_id': self.to_user_id,
-            'status': self.status,
-            'created_at': self.created_at.isoformat()
-        }
-
-class Friendship(db.Model):
-    __tablename__ = 'friendships'
-    __bind_key__ = 'chats'
-    
-    id = db.Column(db.Integer, primary_key=True)
-    user1_id = db.Column(db.Integer, nullable=False)  # Без FK
-    user2_id = db.Column(db.Integer, nullable=False)  # Без FK
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
-    __table_args__ = (db.UniqueConstraint('user1_id', 'user2_id', name='unique_friendship'),)
-    
-    def to_dict(self):
-        # users будут добавляться отдельно в server.py
-        return {
-            'id': self.id,
-            'user1_id': self.user1_id,
-            'user2_id': self.user2_id,
-            'created_at': self.created_at.isoformat()
-        }
-
-class DMChannel(db.Model):
-    __tablename__ = 'dm_channels'
-    __bind_key__ = 'chats'
-    
-    id = db.Column(db.Integer, primary_key=True)
-    user1_id = db.Column(db.Integer, nullable=False)  # Без FK
-    user2_id = db.Column(db.Integer, nullable=False)  # Без FK
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
-    # Отношения
-    messages = db.relationship('Message', back_populates='dm_channel', cascade='all, delete-orphan')
-    
-    __table_args__ = (db.UniqueConstraint('user1_id', 'user2_id', name='unique_dm_channel'),)
-    
-    def to_dict(self, current_user_id=None):
-        # other_user будет добавляться отдельно в server.py
-        last_message = self.messages[-1] if self.messages else None
-        return {
-            'id': self.id,
-            'user1_id': self.user1_id,
-            'user2_id': self.user2_id,
-            'created_at': self.created_at.isoformat(),
-            'last_message': last_message.to_dict() if last_message else None,
-            'unread_count': 0
-        }
-
-class UserSettings(db.Model):
-    __tablename__ = 'user_settings'
-    __bind_key__ = 'users'
-    
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), unique=True, nullable=False)
-    theme = db.Column(db.String(20), default='dark')  # dark, light
-    language = db.Column(db.String(10), default='ru')
-    notifications = db.Column(db.Boolean, default=True)
-    sound_enabled = db.Column(db.Boolean, default=True)
-    
-    # Отношения
-    user = db.relationship('User', backref='settings', uselist=False)
-    
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'user_id': self.user_id,
-            'theme': self.theme,
-            'language': self.language,
-            'notifications': self.notifications,
-            'sound_enabled': self.sound_enabled
-        }
+import jwt as pyjwt
+from storage import storage, hash_password, check_password
 
 # ==================== FLASK APP ====================
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'rucord-secret-key-change-in-production')
-
-# Определяем путь для баз данных
-# На Render используем /tmp для временных файлов или создаем instance директорию
-instance_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'instance')
-if not os.path.exists(instance_path):
-    try:
-        os.makedirs(instance_path, exist_ok=True)
-    except Exception as e:
-        print(f"Warning: Could not create instance directory: {e}")
-        # Fallback на /tmp для Render
-        instance_path = '/tmp'
-
-# Конфигурация нескольких баз данных
-# Добавляем check_same_thread=False для работы в многопоточной среде
-app.config['SQLALCHEMY_BINDS'] = {
-    'users': f'sqlite:///{os.path.join(instance_path, "Users.db")}?check_same_thread=False',
-    'groups': f'sqlite:///{os.path.join(instance_path, "Groups.db")}?check_same_thread=False',
-    'chats': f'sqlite:///{os.path.join(instance_path, "Chats.db")}?check_same_thread=False'
-}
-
-# Настройки для работы с threading
-# Используем NullPool для SQLite, чтобы избежать проблем с блокировками в многопоточной среде
-app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    'poolclass': NullPool,
-    'connect_args': {'check_same_thread': False}
-}
-
-print(f"[DB] Database path: {instance_path}")
-print(f"[DB] Users DB: {app.config['SQLALCHEMY_BINDS']['users']}")
-print(f"[DB] Groups DB: {app.config['SQLALCHEMY_BINDS']['groups']}")
-print(f"[DB] Chats DB: {app.config['SQLALCHEMY_BINDS']['chats']}")
-
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'jwt-secret-key-change-in-production')
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=30)
 
-# Инициализация базы данных
-db.init_app(app)
-
 jwt = JWTManager(app)
-
-# Используем threading вместо eventlet для избежания конфликтов с SQLAlchemy
-# Или можно использовать gevent, но threading проще
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', logger=True, engineio_logger=True)
 CORS(app)
 
-# Глобальный обработчик ошибок для логирования
+# Helper function to get user from token
+def get_user_from_token(token):
+    """Получить пользователя из токена для WebSocket"""
+    try:
+        decoded = pyjwt.decode(token, app.config['JWT_SECRET_KEY'], algorithms=['HS256'])
+        return decoded.get('sub')
+    except Exception as e:
+        print(f"Token decode error: {e}")
+        return None
+
+# Initialize admin user
+def init_admin_user():
+    """Create admin user if it doesn't exist"""
+    admin = storage.get_one_by_field('users', 'username', 'admin')
+    if not admin:
+        print("[STORAGE] Creating admin user...")
+        admin = storage.add('users', {
+            'username': 'admin',
+            'email': 'admin@rucord.com',
+            'password_hash': hash_password('admin123'),
+            'avatar': 'default_avatar.png',
+            'status': 'online',
+            'status_message': None
+        })
+        
+        # Create settings for admin
+        storage.add('user_settings', {
+            'user_id': admin['id'],
+            'theme': 'dark',
+            'language': 'ru',
+            'notifications': True,
+            'sound_enabled': True
+        })
+        print("[STORAGE] Admin user created successfully")
+    else:
+        print("[STORAGE] Admin user already exists")
+
+# Initialize storage
+print("[STORAGE] Initializing JSON storage...")
+init_admin_user()
+
+# Global error handler
 @app.errorhandler(Exception)
 def handle_exception(e):
     import traceback
@@ -297,52 +68,16 @@ def handle_exception(e):
     print(f"[ERROR] Unhandled exception: {error_msg}")
     print(f"[ERROR] Traceback:\n{error_traceback}")
     
-    # Возвращаем JSON ошибку для API запросов
     if request.path.startswith('/api/'):
         return jsonify({'error': f'Server error: {error_msg}'}), 500
     
-    # Для остальных запросов возвращаем стандартную страницу ошибки
     return f"Internal Server Error: {error_msg}", 500
-
-# Создание таблиц во всех базах данных
-try:
-    with app.app_context():
-        print("[DB] Creating database tables...")
-        db.create_all(bind_key='users')
-        print("[DB] Users tables created")
-        db.create_all(bind_key='groups')
-        print("[DB] Groups tables created")
-        db.create_all(bind_key='chats')
-        print("[DB] Chats tables created")
-        
-        # Создание тестового пользователя если не существует
-        if not User.query.filter_by(username='admin').first():
-            print("[DB] Creating admin user...")
-            admin = User(username='admin', email='admin@rucord.com')
-            admin.set_password('admin123')
-            admin.status = 'online'
-            db.session.add(admin)
-            db.session.commit()
-            
-            # Создаем настройки для admin
-            if not UserSettings.query.filter_by(user_id=admin.id).first():
-                settings = UserSettings(user_id=admin.id)
-                db.session.add(settings)
-                db.session.commit()
-            print("[DB] Admin user created successfully")
-        else:
-            print("[DB] Admin user already exists")
-except Exception as e:
-    import traceback
-    print(f"[DB ERROR] Failed to initialize databases: {e}")
-    traceback.print_exc()
 
 # ==================== API Routes ====================
 
 @app.route('/')
 def index():
     return render_template('index.html')
-    # Редирект на /home теперь обрабатывается на клиенте
 
 @app.route('/home')
 def home():
@@ -366,24 +101,43 @@ def register():
         if not username or not email or not password:
             return jsonify({'error': 'Все поля обязательны'}), 400
         
-        if User.query.filter_by(username=username).first():
+        if storage.get_one_by_field('users', 'username', username):
             return jsonify({'error': 'Пользователь с таким именем уже существует'}), 400
         
-        if User.query.filter_by(email=email).first():
+        if storage.get_one_by_field('users', 'email', email):
             return jsonify({'error': 'Пользователь с таким email уже существует'}), 400
         
-        user = User(username=username, email=email)
-        user.set_password(password)
-        db.session.add(user)
-        db.session.commit()
+        user = storage.add('users', {
+            'username': username,
+            'email': email,
+            'password_hash': hash_password(password),
+            'avatar': 'default_avatar.png',
+            'status': 'offline',
+            'status_message': None
+        })
         
-        access_token = create_access_token(identity=user.id)
+        # Create default settings
+        storage.add('user_settings', {
+            'user_id': user['id'],
+            'theme': 'dark',
+            'language': 'ru',
+            'notifications': True,
+            'sound_enabled': True
+        })
+        
+        access_token = create_access_token(identity=user['id'])
         return jsonify({
             'token': access_token,
-            'user': user.to_dict()
+            'user': {
+                'id': user['id'],
+                'username': user['username'],
+                'avatar': user['avatar'],
+                'status': user['status'],
+                'status_message': user.get('status_message'),
+                'created_at': user.get('created_at')
+            }
         }), 201
     except Exception as e:
-        db.session.rollback()
         import traceback
         error_msg = str(e)
         traceback.print_exc()
@@ -409,7 +163,7 @@ def login():
             return jsonify({'error': 'Имя пользователя и пароль обязательны'}), 400
         
         print(f"[LOGIN] Querying user: {username}")
-        user = User.query.filter_by(username=username).first()
+        user = storage.get_one_by_field('users', 'username', username)
         print(f"[LOGIN] User found: {user is not None}")
         
         if not user:
@@ -417,19 +171,25 @@ def login():
             return jsonify({'error': 'Неверное имя пользователя или пароль'}), 401
         
         print("[LOGIN] Checking password")
-        if not user.check_password(password):
+        if not check_password(password, user['password_hash']):
             print("[LOGIN] Invalid password")
             return jsonify({'error': 'Неверное имя пользователя или пароль'}), 401
         
         print("[LOGIN] Creating access token")
-        access_token = create_access_token(identity=user.id)
+        access_token = create_access_token(identity=user['id'])
         print("[LOGIN] Login successful")
         return jsonify({
             'token': access_token,
-            'user': user.to_dict()
+            'user': {
+                'id': user['id'],
+                'username': user['username'],
+                'avatar': user['avatar'],
+                'status': user['status'],
+                'status_message': user.get('status_message'),
+                'created_at': user.get('created_at')
+            }
         }), 200
     except Exception as e:
-        db.session.rollback()
         import traceback
         error_msg = str(e)
         error_traceback = traceback.format_exc()
@@ -441,21 +201,60 @@ def login():
 @jwt_required()
 def get_current_user():
     user_id = get_jwt_identity()
-    user = User.query.get(user_id)
+    user = storage.get_by_id('users', user_id)
     
     if not user:
         return jsonify({'error': 'Пользователь не найден'}), 404
     
-    return jsonify(user.to_dict()), 200
+    return jsonify({
+        'id': user['id'],
+        'username': user['username'],
+        'avatar': user['avatar'],
+        'status': user['status'],
+        'status_message': user.get('status_message'),
+        'created_at': user.get('created_at')
+    }), 200
+
+# Helper function to format user dict
+def format_user_dict(user, include_email=False):
+    """Format user dictionary for response"""
+    data = {
+        'id': user['id'],
+        'username': user['username'],
+        'avatar': user.get('avatar', 'default_avatar.png'),
+        'status': user.get('status', 'offline'),
+        'status_message': user.get('status_message'),
+        'created_at': user.get('created_at')
+    }
+    if include_email:
+        data['email'] = user.get('email')
+    return data
+
+# ==================== Servers API ====================
 
 @app.route('/api/servers', methods=['GET'])
 @jwt_required()
 def get_servers():
     user_id = get_jwt_identity()
-    memberships = ServerMember.query.filter_by(user_id=user_id).all()
-    servers = [membership.server for membership in memberships]
+    memberships = storage.get_by_field('server_members', 'user_id', user_id)
+    server_ids = [m['server_id'] for m in memberships]
+    servers = [storage.get_by_id('servers', sid) for sid in server_ids if storage.get_by_id('servers', sid)]
     
-    return jsonify([server.to_dict() for server in servers]), 200
+    result = []
+    for server in servers:
+        channels = storage.get_by_field('channels', 'server_id', server['id'])
+        members = storage.get_by_field('server_members', 'server_id', server['id'])
+        result.append({
+            'id': server['id'],
+            'name': server['name'],
+            'icon': server.get('icon', 'default_server.png'),
+            'owner_id': server['owner_id'],
+            'created_at': server.get('created_at'),
+            'member_count': len(members),
+            'channel_count': len(channels)
+        })
+    
+    return jsonify(result), 200
 
 @app.route('/api/servers', methods=['POST'])
 @jwt_required()
@@ -467,64 +266,117 @@ def create_server():
     if not name:
         return jsonify({'error': 'Имя сервера обязательно'}), 400
     
-    server = Server(name=name, owner_id=user_id)
-    db.session.add(server)
-    db.session.commit()
+    server = storage.add('servers', {
+        'name': name,
+        'icon': 'default_server.png',
+        'owner_id': user_id
+    })
     
-    # Добавляем создателя как владельца
-    member = ServerMember(user_id=user_id, server_id=server.id, role='owner')
-    db.session.add(member)
+    # Add creator as owner
+    storage.add('server_members', {
+        'user_id': user_id,
+        'server_id': server['id'],
+        'role': 'owner'
+    })
     
-    # Создаем общий канал
-    channel = Channel(server_id=server.id, name='общий', type='text')
-    db.session.add(channel)
-    db.session.commit()
+    # Create general channel
+    storage.add('channels', {
+        'server_id': server['id'],
+        'name': 'общий',
+        'type': 'text'
+    })
     
-    return jsonify(server.to_dict()), 201
+    return jsonify({
+        'id': server['id'],
+        'name': server['name'],
+        'icon': server.get('icon', 'default_server.png'),
+        'owner_id': server['owner_id'],
+        'created_at': server.get('created_at'),
+        'member_count': 1,
+        'channel_count': 1
+    }), 201
 
 @app.route('/api/servers/<int:server_id>', methods=['GET'])
 @jwt_required()
 def get_server(server_id):
     user_id = get_jwt_identity()
     
-    # Проверяем является ли пользователь участником
-    member = ServerMember.query.filter_by(user_id=user_id, server_id=server_id).first()
+    members = storage.get_by_field('server_members', 'user_id', user_id)
+    member = None
+    for m in members:
+        if m.get('server_id') == server_id:
+            member = m
+            break
+    
     if not member:
         return jsonify({'error': 'У вас нет доступа к этому серверу'}), 403
     
-    server = Server.query.get_or_404(server_id)
-    return jsonify(server.to_dict()), 200
+    server = storage.get_by_id('servers', server_id)
+    if not server:
+        return jsonify({'error': 'Сервер не найден'}), 404
+    
+    channels = storage.get_by_field('channels', 'server_id', server_id)
+    members = storage.get_by_field('server_members', 'server_id', server_id)
+    
+    return jsonify({
+        'id': server['id'],
+        'name': server['name'],
+        'icon': server.get('icon', 'default_server.png'),
+        'owner_id': server['owner_id'],
+        'created_at': server.get('created_at'),
+        'member_count': len(members),
+        'channel_count': len(channels)
+    }), 200
 
 @app.route('/api/servers/<int:server_id>/join', methods=['POST'])
 @jwt_required()
 def join_server(server_id):
     user_id = get_jwt_identity()
     
-    server = Server.query.get_or_404(server_id)
+    server = storage.get_by_id('servers', server_id)
+    if not server:
+        return jsonify({'error': 'Сервер не найден'}), 404
     
-    # Проверяем не является ли уже участником
-    existing_member = ServerMember.query.filter_by(user_id=user_id, server_id=server_id).first()
-    if existing_member:
+    # Check if already a member
+    existing = storage.get_by_field('server_members', 'user_id', user_id)
+    existing = [m for m in existing if m.get('server_id') == server_id]
+    if existing:
         return jsonify({'error': 'Вы уже участник этого сервера'}), 400
     
-    member = ServerMember(user_id=user_id, server_id=server_id, role='member')
-    db.session.add(member)
-    db.session.commit()
+    storage.add('server_members', {
+        'user_id': user_id,
+        'server_id': server_id,
+        'role': 'member'
+    })
     
-    return jsonify({'message': 'Вы присоединились к серверу', 'server': server.to_dict()}), 200
+    return jsonify({'message': 'Вы присоединились к серверу', 'server': {
+        'id': server['id'],
+        'name': server['name'],
+        'icon': server.get('icon', 'default_server.png'),
+        'owner_id': server['owner_id'],
+        'created_at': server.get('created_at')
+    }}), 200
 
 @app.route('/api/servers/<int:server_id>/channels', methods=['GET'])
 @jwt_required()
 def get_channels(server_id):
     user_id = get_jwt_identity()
     
-    # Проверяем является ли пользователь участником
-    member = ServerMember.query.filter_by(user_id=user_id, server_id=server_id).first()
-    if not member:
+    member = storage.get_one_by_field('server_members', 'user_id', user_id)
+    if not member or member.get('server_id') != server_id:
         return jsonify({'error': 'У вас нет доступа к этому серверу'}), 403
     
-    channels = Channel.query.filter_by(server_id=server_id).order_by(Channel.created_at).all()
-    return jsonify([channel.to_dict() for channel in channels]), 200
+    channels = storage.get_by_field('channels', 'server_id', server_id)
+    channels.sort(key=lambda x: x.get('created_at', ''))
+    
+    return jsonify([{
+        'id': ch['id'],
+        'server_id': ch['server_id'],
+        'name': ch['name'],
+        'type': ch.get('type', 'text'),
+        'created_at': ch.get('created_at'),
+        'message_count': 0
+    } for ch in channels]), 200
 
 @app.route('/api/servers/<int:server_id>/channels', methods=['POST'])
 @jwt_required()
@@ -537,41 +389,74 @@ def create_channel(server_id):
     if not name:
         return jsonify({'error': 'Имя канала обязательно'}), 400
     
-    # Проверяем является ли пользователь участником
-    member = ServerMember.query.filter_by(user_id=user_id, server_id=server_id).first()
+    members = storage.get_by_field('server_members', 'user_id', user_id)
+    member = None
+    for m in members:
+        if m.get('server_id') == server_id:
+            member = m
+            break
+    
     if not member:
         return jsonify({'error': 'У вас нет доступа к этому серверу'}), 403
     
-    # Проверяем права на создание канала (владелец или админ)
-    if member.role not in ['owner', 'admin']:
+    if member.get('role') not in ['owner', 'admin']:
         return jsonify({'error': 'У вас нет прав на создание канала'}), 403
     
-    channel = Channel(server_id=server_id, name=name, type=channel_type)
-    db.session.add(channel)
-    db.session.commit()
+    channel = storage.add('channels', {
+        'server_id': server_id,
+        'name': name,
+        'type': channel_type
+    })
     
-    return jsonify(channel.to_dict()), 201
+    return jsonify({
+        'id': channel['id'],
+        'server_id': channel['server_id'],
+        'name': channel['name'],
+        'type': channel.get('type', 'text'),
+        'created_at': channel.get('created_at'),
+        'message_count': 0
+    }), 201
 
 @app.route('/api/channels/<int:channel_id>/messages', methods=['GET'])
 @jwt_required()
 def get_messages(channel_id):
     user_id = get_jwt_identity()
     
-    channel = Channel.query.get_or_404(channel_id)
+    channel = storage.get_by_id('channels', channel_id)
+    if not channel:
+        return jsonify({'error': 'Канал не найден'}), 404
     
-    # Проверяем является ли пользователь участником сервера
-    member = ServerMember.query.filter_by(user_id=user_id, server_id=channel.server_id).first()
+    members = storage.get_by_field('server_members', 'user_id', user_id)
+    member = None
+    for m in members:
+        if m.get('server_id') == channel['server_id']:
+            member = m
+            break
+    
     if not member:
         return jsonify({'error': 'У вас нет доступа к этому каналу'}), 403
     
     limit = request.args.get('limit', 50, type=int)
-    messages = Message.query.filter_by(channel_id=channel_id)\
-        .order_by(Message.created_at.desc())\
-        .limit(limit)\
-        .all()
-    
+    messages = storage.get_by_field('messages', 'channel_id', channel_id)
+    messages.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+    messages = messages[:limit]
     messages.reverse()
-    return jsonify([message.to_dict() for message in messages]), 200
+    
+    result = []
+    for msg in messages:
+        user = storage.get_by_id('users', msg['user_id'])
+        result.append({
+            'id': msg['id'],
+            'channel_id': msg.get('channel_id'),
+            'dm_channel_id': msg.get('dm_channel_id'),
+            'user_id': msg['user_id'],
+            'content': msg['content'],
+            'created_at': msg.get('created_at'),
+            'edited_at': msg.get('edited_at'),
+            'user': format_user_dict(user) if user else None
+        })
+    
+    return jsonify(result), 200
 
 @app.route('/api/channels/<int:channel_id>/messages', methods=['POST'])
 @jwt_required()
@@ -583,24 +468,38 @@ def create_message(channel_id):
     if not content or not content.strip():
         return jsonify({'error': 'Сообщение не может быть пустым'}), 400
     
-    channel = Channel.query.get_or_404(channel_id)
+    channel = storage.get_by_id('channels', channel_id)
+    if not channel:
+        return jsonify({'error': 'Канал не найден'}), 404
     
-    # Проверяем является ли пользователь участником сервера
-    member = ServerMember.query.filter_by(user_id=user_id, server_id=channel.server_id).first()
+    members = storage.get_by_field('server_members', 'user_id', user_id)
+    member = None
+    for m in members:
+        if m.get('server_id') == channel['server_id']:
+            member = m
+            break
+    
     if not member:
         return jsonify({'error': 'У вас нет доступа к этому каналу'}), 403
     
-    message = Message(channel_id=channel_id, user_id=user_id, content=content.strip())
-    db.session.add(message)
-    db.session.commit()
+    message = storage.add('messages', {
+        'channel_id': channel_id,
+        'user_id': user_id,
+        'content': content.strip()
+    })
     
-    # Получаем пользователя для message
-    user = User.query.get(user_id)
-    message_dict = message.to_dict()
-    if user:
-        message_dict['user'] = user.to_dict()
+    user = storage.get_by_id('users', user_id)
+    message_dict = {
+        'id': message['id'],
+        'channel_id': message.get('channel_id'),
+        'dm_channel_id': message.get('dm_channel_id'),
+        'user_id': message['user_id'],
+        'content': message['content'],
+        'created_at': message.get('created_at'),
+        'edited_at': message.get('edited_at'),
+        'user': format_user_dict(user) if user else None
+    }
     
-    # Отправляем сообщение через WebSocket
     socketio.emit('new_message', message_dict, room=f'channel_{channel_id}')
     
     return jsonify(message_dict), 201
@@ -611,36 +510,38 @@ def create_message(channel_id):
 @jwt_required()
 def search_users():
     user_id = get_jwt_identity()
-    query = request.args.get('q', '')
+    query = request.args.get('q', '').lower()
     
     if not query or len(query) < 2:
         return jsonify([]), 200
     
-    users = User.query.filter(
-        User.username.ilike(f'%{query}%'),
-        User.id != user_id
-    ).limit(10).all()
+    all_users = storage.get_all('users')
+    matching = [u for u in all_users if query in u.get('username', '').lower() and u['id'] != user_id]
     
-    return jsonify([user.to_dict() for user in users]), 200
+    return jsonify([format_user_dict(u) for u in matching[:10]]), 200
 
 @app.route('/api/friends/requests', methods=['GET'])
 @jwt_required()
 def get_friend_requests():
     user_id = get_jwt_identity()
     
-    # Получаем входящие и исходящие запросы
-    incoming = FriendRequest.query.filter_by(to_user_id=user_id, status='pending').all()
-    outgoing = FriendRequest.query.filter_by(from_user_id=user_id, status='pending').all()
+    incoming = [r for r in storage.get_by_field('friend_requests', 'to_user_id', user_id) if r.get('status') == 'pending']
+    outgoing = [r for r in storage.get_by_field('friend_requests', 'from_user_id', user_id) if r.get('status') == 'pending']
     
-    # Добавляем пользователей к запросам
     def enrich_request(req):
-        req_dict = req.to_dict()
-        from_user = User.query.get(req.from_user_id)
-        to_user = User.query.get(req.to_user_id)
+        req_dict = {
+            'id': req['id'],
+            'from_user_id': req['from_user_id'],
+            'to_user_id': req['to_user_id'],
+            'status': req.get('status', 'pending'),
+            'created_at': req.get('created_at')
+        }
+        from_user = storage.get_by_id('users', req['from_user_id'])
+        to_user = storage.get_by_id('users', req['to_user_id'])
         if from_user:
-            req_dict['from_user'] = from_user.to_dict()
+            req_dict['from_user'] = format_user_dict(from_user)
         if to_user:
-            req_dict['to_user'] = to_user.to_dict()
+            req_dict['to_user'] = format_user_dict(to_user)
         return req_dict
     
     return jsonify({
@@ -661,62 +562,62 @@ def send_friend_request():
     if to_user_id == user_id:
         return jsonify({'error': 'Нельзя отправить запрос самому себе'}), 400
     
-    to_user = User.query.get(to_user_id)
+    to_user = storage.get_by_id('users', to_user_id)
     if not to_user:
         return jsonify({'error': 'Пользователь не найден'}), 404
     
-    # Проверяем, не являются ли уже друзьями
-    friendship = Friendship.query.filter(
-        ((Friendship.user1_id == user_id) & (Friendship.user2_id == to_user_id)) |
-        ((Friendship.user1_id == to_user_id) & (Friendship.user2_id == user_id))
-    ).first()
+    # Check if already friends
+    friendships = storage.get_all('friendships')
+    friendship = None
+    for f in friendships:
+        if (f['user1_id'] == user_id and f['user2_id'] == to_user_id) or \
+           (f['user1_id'] == to_user_id and f['user2_id'] == user_id):
+            friendship = f
+            break
     
     if friendship:
         return jsonify({'error': 'Вы уже друзья'}), 400
     
-    # Проверяем, нет ли уже запроса
-    existing_request = FriendRequest.query.filter(
-        ((FriendRequest.from_user_id == user_id) & (FriendRequest.to_user_id == to_user_id)) |
-        ((FriendRequest.from_user_id == to_user_id) & (FriendRequest.to_user_id == user_id))
-    ).first()
+    # Check if request already exists
+    all_requests = storage.get_all('friend_requests')
+    existing_request = None
+    for req in all_requests:
+        if ((req['from_user_id'] == user_id and req['to_user_id'] == to_user_id) or \
+            (req['from_user_id'] == to_user_id and req['to_user_id'] == user_id)) and \
+           req.get('status') == 'pending':
+            existing_request = req
+            break
     
     if existing_request:
-        if existing_request.status == 'pending':
-            if existing_request.from_user_id == user_id:
-                return jsonify({'error': 'Запрос уже отправлен'}), 400
-            else:
-                # Автоматически принимаем, если запрос был отправлен другим пользователем
-                existing_request.status = 'accepted'
-                friendship = Friendship(user1_id=min(user_id, to_user_id), user2_id=max(user_id, to_user_id))
-                db.session.add(friendship)
-                db.session.commit()
-                return jsonify({'message': 'Запрос принят', 'friendship': friendship.to_dict()}), 200
+        if existing_request['from_user_id'] == user_id:
+            return jsonify({'error': 'Запрос уже отправлен'}), 400
         else:
-            return jsonify({'error': 'Запрос уже был обработан'}), 400
+            # Auto-accept if request was sent by other user
+            storage.update('friend_requests', existing_request['id'], {'status': 'accepted'})
+            storage.add('friendships', {
+                'user1_id': min(user_id, to_user_id),
+                'user2_id': max(user_id, to_user_id)
+            })
+            return jsonify({'message': 'Запрос принят'}), 200
     
-    friend_request = FriendRequest(from_user_id=user_id, to_user_id=to_user_id)
-    db.session.add(friend_request)
-    db.session.commit()
+    friend_request = storage.add('friend_requests', {
+        'from_user_id': user_id,
+        'to_user_id': to_user_id,
+        'status': 'pending'
+    })
     
-    # Получаем пользователей для friend_request
-    from_user = User.query.get(user_id)
-    to_user = User.query.get(to_user_id)
-    request_dict = friend_request.to_dict()
-    if from_user and to_user:
-        request_dict['from_user'] = from_user.to_dict()
-        request_dict['to_user'] = to_user.to_dict()
+    request_dict = {
+        'id': friend_request['id'],
+        'from_user_id': friend_request['from_user_id'],
+        'to_user_id': friend_request['to_user_id'],
+        'status': friend_request.get('status', 'pending'),
+        'created_at': friend_request.get('created_at'),
+        'from_user': format_user_dict(storage.get_by_id('users', user_id)),
+        'to_user': format_user_dict(to_user)
+    }
     
-    # Уведомляем получателя через WebSocket
     user_room = f'user_{to_user_id}'
-    print(f'[FRIEND REQUEST] Отправка уведомления в комнату {user_room} для пользователя {to_user_id}')
-    print(f'[FRIEND REQUEST] Данные запроса: {request_dict}')
-    
-    # Отправляем уведомление в комнату пользователя
-    try:
-        socketio.emit('friend_request_received', request_dict, room=user_room)
-        print(f'[FRIEND REQUEST] Уведомление отправлено успешно')
-    except Exception as e:
-        print(f'[FRIEND REQUEST] Ошибка при отправке уведомления: {e}')
+    socketio.emit('friend_request_received', request_dict, room=user_room)
     
     return jsonify(request_dict), 201
 
@@ -725,38 +626,38 @@ def send_friend_request():
 def accept_friend_request(request_id):
     user_id = get_jwt_identity()
     
-    friend_request = FriendRequest.query.get_or_404(request_id)
+    friend_request = storage.get_by_id('friend_requests', request_id)
+    if not friend_request:
+        return jsonify({'error': 'Запрос не найден'}), 404
     
-    if friend_request.to_user_id != user_id:
+    if friend_request['to_user_id'] != user_id:
         return jsonify({'error': 'У вас нет прав для принятия этого запроса'}), 403
     
-    if friend_request.status != 'pending':
+    if friend_request.get('status') != 'pending':
         return jsonify({'error': 'Запрос уже был обработан'}), 400
     
-    friend_request.status = 'accepted'
+    storage.update('friend_requests', request_id, {'status': 'accepted'})
     
-    # Создаем дружбу
-    friendship = Friendship(
-        user1_id=min(friend_request.from_user_id, friend_request.to_user_id),
-        user2_id=max(friend_request.from_user_id, friend_request.to_user_id)
-    )
-    db.session.add(friendship)
-    db.session.commit()
+    friendship = storage.add('friendships', {
+        'user1_id': min(friend_request['from_user_id'], friend_request['to_user_id']),
+        'user2_id': max(friend_request['from_user_id'], friend_request['to_user_id'])
+    })
     
-    # Получаем пользователей для friendship
-    user1 = User.query.get(friendship.user1_id)
-    user2 = User.query.get(friendship.user2_id)
-    friendship_dict = friendship.to_dict()
-    if user1 and user2:
-        friendship_dict['user1'] = user1.to_dict()
-        friendship_dict['user2'] = user2.to_dict()
+    user1 = storage.get_by_id('users', friendship['user1_id'])
+    user2 = storage.get_by_id('users', friendship['user2_id'])
+    friendship_dict = {
+        'id': friendship['id'],
+        'user1_id': friendship['user1_id'],
+        'user2_id': friendship['user2_id'],
+        'created_at': friendship.get('created_at'),
+        'user1': format_user_dict(user1) if user1 else None,
+        'user2': format_user_dict(user2) if user2 else None
+    }
     
-    # Уведомляем отправителя
-    user_room = f'user_{friend_request.from_user_id}'
-    print(f'[FRIEND ACCEPT] Отправка уведомления в комнату {user_room} для пользователя {friend_request.from_user_id}')
+    user_room = f'user_{friend_request["from_user_id"]}'
     socketio.emit('friend_request_accepted', {
         'friendship': friendship_dict,
-        'friend': user2.to_dict() if user2 else {}
+        'friend': format_user_dict(user2) if user2 else {}
     }, room=user_room)
     
     return jsonify({'message': 'Запрос принят', 'friendship': friendship_dict}), 200
@@ -766,13 +667,14 @@ def accept_friend_request(request_id):
 def decline_friend_request(request_id):
     user_id = get_jwt_identity()
     
-    friend_request = FriendRequest.query.get_or_404(request_id)
+    friend_request = storage.get_by_id('friend_requests', request_id)
+    if not friend_request:
+        return jsonify({'error': 'Запрос не найден'}), 404
     
-    if friend_request.to_user_id != user_id:
+    if friend_request['to_user_id'] != user_id:
         return jsonify({'error': 'У вас нет прав для отклонения этого запроса'}), 403
     
-    friend_request.status = 'declined'
-    db.session.commit()
+    storage.update('friend_requests', request_id, {'status': 'declined'})
     
     return jsonify({'message': 'Запрос отклонен'}), 200
 
@@ -781,16 +683,15 @@ def decline_friend_request(request_id):
 def get_friends():
     user_id = get_jwt_identity()
     
-    friendships = Friendship.query.filter(
-        (Friendship.user1_id == user_id) | (Friendship.user2_id == user_id)
-    ).all()
+    friendships = storage.get_all('friendships')
+    user_friendships = [f for f in friendships if f['user1_id'] == user_id or f['user2_id'] == user_id]
     
     friends = []
-    for friendship in friendships:
-        friend_id = friendship.user2_id if friendship.user1_id == user_id else friendship.user1_id
-        friend = User.query.get(friend_id)
+    for friendship in user_friendships:
+        friend_id = friendship['user2_id'] if friendship['user1_id'] == user_id else friendship['user1_id']
+        friend = storage.get_by_id('users', friend_id)
         if friend:
-            friends.append(friend.to_dict())
+            friends.append(format_user_dict(friend))
     
     return jsonify(friends), 200
 
@@ -799,16 +700,18 @@ def get_friends():
 def remove_friend(friend_id):
     user_id = get_jwt_identity()
     
-    friendship = Friendship.query.filter(
-        ((Friendship.user1_id == user_id) & (Friendship.user2_id == friend_id)) |
-        ((Friendship.user1_id == friend_id) & (Friendship.user2_id == user_id))
-    ).first()
+    friendships = storage.get_all('friendships')
+    friendship = None
+    for f in friendships:
+        if ((f.get('user1_id') == user_id and f.get('user2_id') == friend_id) or
+            (f.get('user1_id') == friend_id and f.get('user2_id') == user_id)):
+            friendship = f
+            break
     
     if not friendship:
         return jsonify({'error': 'Дружба не найдена'}), 404
     
-    db.session.delete(friendship)
-    db.session.commit()
+    storage.delete('friendships', friendship['id'])
     
     return jsonify({'message': 'Друг удален'}), 200
 
@@ -819,17 +722,34 @@ def remove_friend(friend_id):
 def get_dm_channels():
     user_id = get_jwt_identity()
     
-    channels = DMChannel.query.filter(
-        (DMChannel.user1_id == user_id) | (DMChannel.user2_id == user_id)
-    ).order_by(DMChannel.created_at.desc()).all()
+    all_channels = storage.get_all('dm_channels')
+    user_channels = [ch for ch in all_channels if ch['user1_id'] == user_id or ch['user2_id'] == user_id]
+    user_channels.sort(key=lambda x: x.get('created_at', ''), reverse=True)
     
     result = []
-    for channel in channels:
-        dm_dict = channel.to_dict(user_id)
-        other_user_id = channel.user2_id if channel.user1_id == user_id else channel.user1_id
-        other_user = User.query.get(other_user_id)
+    for channel in user_channels:
+        other_user_id = channel['user2_id'] if channel['user1_id'] == user_id else channel['user1_id']
+        other_user = storage.get_by_id('users', other_user_id)
+        
+        messages = storage.get_by_field('messages', 'dm_channel_id', channel['id'])
+        last_message = messages[-1] if messages else None
+        
+        dm_dict = {
+            'id': channel['id'],
+            'user1_id': channel['user1_id'],
+            'user2_id': channel['user2_id'],
+            'created_at': channel.get('created_at'),
+            'last_message': {
+                'id': last_message['id'],
+                'content': last_message['content'],
+                'created_at': last_message.get('created_at')
+            } if last_message else None,
+            'unread_count': 0
+        }
+        
         if other_user:
-            dm_dict['other_user'] = other_user.to_dict()
+            dm_dict['other_user'] = format_user_dict(other_user)
+        
         result.append(dm_dict)
     
     return jsonify(result), 200
@@ -847,36 +767,48 @@ def create_dm_channel():
     if other_user_id == user_id:
         return jsonify({'error': 'Нельзя создать DM с самим собой'}), 400
     
-    other_user = User.query.get(other_user_id)
+    other_user = storage.get_by_id('users', other_user_id)
     if not other_user:
         return jsonify({'error': 'Пользователь не найден'}), 404
     
-    # Проверяем, существует ли уже канал
-    existing_channel = DMChannel.query.filter(
-        ((DMChannel.user1_id == user_id) & (DMChannel.user2_id == other_user_id)) |
-        ((DMChannel.user1_id == other_user_id) & (DMChannel.user2_id == user_id))
-    ).first()
+    # Check if channel already exists
+    all_channels = storage.get_all('dm_channels')
+    existing_channel = None
+    for ch in all_channels:
+        if ((ch.get('user1_id') == user_id and ch.get('user2_id') == other_user_id) or
+            (ch.get('user1_id') == other_user_id and ch.get('user2_id') == user_id)):
+            existing_channel = ch
+            break
     
     if existing_channel:
-        dm_dict = existing_channel.to_dict(user_id)
-        # ВАЖНО: Добавляем other_user для существующего канала
+        dm_dict = {
+            'id': existing_channel['id'],
+            'user1_id': existing_channel['user1_id'],
+            'user2_id': existing_channel['user2_id'],
+            'created_at': existing_channel.get('created_at'),
+            'last_message': None,
+            'unread_count': 0
+        }
         if other_user:
-            dm_dict['other_user'] = other_user.to_dict()
+            dm_dict['other_user'] = format_user_dict(other_user)
         return jsonify(dm_dict), 200
     
-    # Создаем новый канал
-    dm_channel = DMChannel(
-        user1_id=min(user_id, other_user_id),
-        user2_id=max(user_id, other_user_id)
-    )
-    db.session.add(dm_channel)
-    db.session.commit()
+    # Create new channel
+    dm_channel = storage.add('dm_channels', {
+        'user1_id': min(user_id, other_user_id),
+        'user2_id': max(user_id, other_user_id)
+    })
     
-    # Получаем другого пользователя
-    other_user = User.query.get(other_user_id)
-    dm_dict = dm_channel.to_dict(user_id)
+    dm_dict = {
+        'id': dm_channel['id'],
+        'user1_id': dm_channel['user1_id'],
+        'user2_id': dm_channel['user2_id'],
+        'created_at': dm_channel.get('created_at'),
+        'last_message': None,
+        'unread_count': 0
+    }
     if other_user:
-        dm_dict['other_user'] = other_user.to_dict()
+        dm_dict['other_user'] = format_user_dict(other_user)
     
     return jsonify(dm_dict), 201
 
@@ -885,27 +817,33 @@ def create_dm_channel():
 def get_dm_messages(channel_id):
     user_id = get_jwt_identity()
     
-    dm_channel = DMChannel.query.get_or_404(channel_id)
+    dm_channel = storage.get_by_id('dm_channels', channel_id)
+    if not dm_channel:
+        return jsonify({'error': 'Канал не найден'}), 404
     
-    # Проверяем, является ли пользователь участником
-    if dm_channel.user1_id != user_id and dm_channel.user2_id != user_id:
+    if dm_channel.get('user1_id') != user_id and dm_channel.get('user2_id') != user_id:
         return jsonify({'error': 'У вас нет доступа к этому каналу'}), 403
     
     limit = request.args.get('limit', 50, type=int)
-    messages = Message.query.filter_by(dm_channel_id=channel_id)\
-        .order_by(Message.created_at.desc())\
-        .limit(limit)\
-        .all()
-    
+    messages = storage.get_by_field('messages', 'dm_channel_id', channel_id)
+    messages.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+    messages = messages[:limit]
     messages.reverse()
-    # Добавляем информацию о пользователях к сообщениям
+    
     result = []
-    for message in messages:
-        msg_dict = message.to_dict()
-        user = User.query.get(message.user_id)
-        if user:
-            msg_dict['user'] = user.to_dict()
-        result.append(msg_dict)
+    for msg in messages:
+        user = storage.get_by_id('users', msg['user_id'])
+        result.append({
+            'id': msg['id'],
+            'channel_id': msg.get('channel_id'),
+            'dm_channel_id': msg.get('dm_channel_id'),
+            'user_id': msg['user_id'],
+            'content': msg['content'],
+            'created_at': msg.get('created_at'),
+            'edited_at': msg.get('edited_at'),
+            'user': format_user_dict(user) if user else None
+        })
+    
     return jsonify(result), 200
 
 @app.route('/api/dm-channels/<int:channel_id>/messages', methods=['POST'])
@@ -918,27 +856,34 @@ def create_dm_message(channel_id):
     if not content or not content.strip():
         return jsonify({'error': 'Сообщение не может быть пустым'}), 400
     
-    dm_channel = DMChannel.query.get_or_404(channel_id)
+    dm_channel = storage.get_by_id('dm_channels', channel_id)
+    if not dm_channel:
+        return jsonify({'error': 'Канал не найден'}), 404
     
-    # Проверяем, является ли пользователь участником
-    if dm_channel.user1_id != user_id and dm_channel.user2_id != user_id:
+    if dm_channel.get('user1_id') != user_id and dm_channel.get('user2_id') != user_id:
         return jsonify({'error': 'У вас нет доступа к этому каналу'}), 403
     
-    message = Message(dm_channel_id=channel_id, user_id=user_id, content=content.strip())
-    db.session.add(message)
-    db.session.commit()
+    message = storage.add('messages', {
+        'dm_channel_id': channel_id,
+        'user_id': user_id,
+        'content': content.strip()
+    })
     
-    # Получаем пользователя для message
-    user = User.query.get(user_id)
-    message_dict = message.to_dict()
-    if user:
-        message_dict['user'] = user.to_dict()
+    user = storage.get_by_id('users', user_id)
+    message_dict = {
+        'id': message['id'],
+        'channel_id': message.get('channel_id'),
+        'dm_channel_id': message.get('dm_channel_id'),
+        'user_id': message['user_id'],
+        'content': message['content'],
+        'created_at': message.get('created_at'),
+        'edited_at': message.get('edited_at'),
+        'user': format_user_dict(user) if user else None
+    }
     
-    # Отправляем сообщение через WebSocket обоим участникам
     socketio.emit('new_dm_message', message_dict, room=f'dm_channel_{channel_id}')
     
-    # Уведомляем другого пользователя
-    other_user_id = dm_channel.user2_id if dm_channel.user1_id == user_id else dm_channel.user1_id
+    other_user_id = dm_channel['user2_id'] if dm_channel['user1_id'] == user_id else dm_channel['user1_id']
     socketio.emit('new_dm_message', message_dict, room=f'user_{other_user_id}')
     
     return jsonify(message_dict), 201
@@ -950,13 +895,24 @@ def create_dm_message(channel_id):
 def get_settings():
     user_id = get_jwt_identity()
     
-    settings = UserSettings.query.filter_by(user_id=user_id).first()
+    settings = storage.get_one_by_field('user_settings', 'user_id', user_id)
     if not settings:
-        settings = UserSettings(user_id=user_id)
-        db.session.add(settings)
-        db.session.commit()
+        settings = storage.add('user_settings', {
+            'user_id': user_id,
+            'theme': 'dark',
+            'language': 'ru',
+            'notifications': True,
+            'sound_enabled': True
+        })
     
-    return jsonify(settings.to_dict()), 200
+    return jsonify({
+        'id': settings['id'],
+        'user_id': settings['user_id'],
+        'theme': settings.get('theme', 'dark'),
+        'language': settings.get('language', 'ru'),
+        'notifications': settings.get('notifications', True),
+        'sound_enabled': settings.get('sound_enabled', True)
+    }), 200
 
 @app.route('/api/settings', methods=['PUT'])
 @jwt_required()
@@ -964,22 +920,37 @@ def update_settings():
     user_id = get_jwt_identity()
     data = request.get_json()
     
-    settings = UserSettings.query.filter_by(user_id=user_id).first()
+    settings = storage.get_one_by_field('user_settings', 'user_id', user_id)
     if not settings:
-        settings = UserSettings(user_id=user_id)
-        db.session.add(settings)
+        settings = storage.add('user_settings', {
+            'user_id': user_id,
+            'theme': 'dark',
+            'language': 'ru',
+            'notifications': True,
+            'sound_enabled': True
+        })
     
+    updates = {}
     if 'theme' in data:
-        settings.theme = data['theme']
+        updates['theme'] = data['theme']
     if 'language' in data:
-        settings.language = data['language']
+        updates['language'] = data['language']
     if 'notifications' in data:
-        settings.notifications = data['notifications']
+        updates['notifications'] = data['notifications']
     if 'sound_enabled' in data:
-        settings.sound_enabled = data['sound_enabled']
+        updates['sound_enabled'] = data['sound_enabled']
     
-    db.session.commit()
-    return jsonify(settings.to_dict()), 200
+    storage.update('user_settings', settings['id'], updates)
+    updated = storage.get_by_id('user_settings', settings['id'])
+    
+    return jsonify({
+        'id': updated['id'],
+        'user_id': updated['user_id'],
+        'theme': updated.get('theme', 'dark'),
+        'language': updated.get('language', 'ru'),
+        'notifications': updated.get('notifications', True),
+        'sound_enabled': updated.get('sound_enabled', True)
+    }), 200
 
 @app.route('/api/me/status', methods=['PUT'])
 @jwt_required()
@@ -987,43 +958,32 @@ def update_status():
     user_id = get_jwt_identity()
     data = request.get_json()
     
-    user = User.query.get(user_id)
+    user = storage.get_by_id('users', user_id)
     if not user:
         return jsonify({'error': 'Пользователь не найден'}), 404
     
+    updates = {}
     if 'status' in data:
-        user.status = data['status']
+        updates['status'] = data['status']
     if 'status_message' in data:
-        user.status_message = data['status_message']
+        updates['status_message'] = data['status_message']
     
-    db.session.commit()
+    storage.update('users', user_id, updates)
+    updated = storage.get_by_id('users', user_id)
     
-    # Уведомляем всех о изменении статуса
-    socketio.emit('user_status_changed', user.to_dict(), namespace='/')
+    socketio.emit('user_status_changed', format_user_dict(updated), namespace='/')
     
-    return jsonify(user.to_dict()), 200
+    return jsonify(format_user_dict(updated)), 200
 
 # ==================== WebSocket Events ====================
-
-def get_user_from_token(token):
-    """Получить пользователя из токена для WebSocket"""
-    try:
-        import jwt as pyjwt
-        decoded = pyjwt.decode(token, app.config['JWT_SECRET_KEY'], algorithms=['HS256'])
-        return decoded.get('sub')
-    except Exception as e:
-        print(f"Token decode error: {e}")
-        return None
 
 @socketio.on('connect')
 def on_connect(auth=None):
     """Подключение через WebSocket"""
     try:
-        # Получаем токен из auth объекта
         if auth and isinstance(auth, dict):
             token = auth.get('token')
         else:
-            # Пытаемся получить токен из заголовков запроса
             from flask import request as flask_request
             token = flask_request.headers.get('Authorization', '').replace('Bearer ', '')
         
@@ -1039,18 +999,16 @@ def on_connect(auth=None):
         print(f'[SOCKET] Пользователь {user_id} подключился')
         session['user_id'] = user_id
         
-        # ВАЖНО: Присоединяем пользователя к его личной комнате для получения уведомлений
         user_room = f'user_{user_id}'
         join_room(user_room)
         print(f'[SOCKET] Пользователь {user_id} присоединился к комнате {user_room}')
         
-        # Обновляем статус пользователя на онлайн
-        user = User.query.get(user_id)
+        # Update user status to online
+        user = storage.get_by_id('users', user_id)
         if user:
-            user.status = 'online'
-            db.session.commit()
-            # Уведомляем всех подключенных клиентов об изменении статуса
-            socketio.emit('user_status_changed', user.to_dict(), namespace='/')
+            storage.update('users', user_id, {'status': 'online'})
+            updated = storage.get_by_id('users', user_id)
+            socketio.emit('user_status_changed', format_user_dict(updated), namespace='/')
         
         emit('connected', {'message': 'Подключено к RUCord'})
         return True
@@ -1065,6 +1023,12 @@ def on_disconnect():
     user_id = session.get('user_id')
     if user_id:
         print(f'Пользователь {user_id} отключился')
+        # Update status to offline
+        user = storage.get_by_id('users', user_id)
+        if user:
+            storage.update('users', user_id, {'status': 'offline'})
+            updated = storage.get_by_id('users', user_id)
+            socketio.emit('user_status_changed', format_user_dict(updated), namespace='/')
 
 @socketio.on('join_channel')
 def on_join_channel(data):
@@ -1076,12 +1040,17 @@ def on_join_channel(data):
     if not channel_id:
         return
     
-    channel = Channel.query.get(channel_id)
+    channel = storage.get_by_id('channels', channel_id)
     if not channel:
         return
     
-    # Проверяем доступ
-    member = ServerMember.query.filter_by(user_id=user_id, server_id=channel.server_id).first()
+    members = storage.get_by_field('server_members', 'user_id', user_id)
+    member = None
+    for m in members:
+        if m.get('server_id') == channel['server_id']:
+            member = m
+            break
+    
     if not member:
         return
     
@@ -1107,20 +1076,18 @@ def on_join_dm_channel(data):
     if not channel_id:
         return
     
-    dm_channel = DMChannel.query.get(channel_id)
+    dm_channel = storage.get_by_id('dm_channels', channel_id)
     if not dm_channel:
         return
     
-    # Проверяем доступ
-    if dm_channel.user1_id != user_id and dm_channel.user2_id != user_id:
+    if dm_channel.get('user1_id') != user_id and dm_channel.get('user2_id') != user_id:
         return
     
-    # Обновляем статус пользователя на онлайн
-    user = User.query.get(user_id)
+    user = storage.get_by_id('users', user_id)
     if user:
-        user.status = 'online'
-        db.session.commit()
-        socketio.emit('user_status_changed', user.to_dict(), namespace='/')
+        storage.update('users', user_id, {'status': 'online'})
+        updated = storage.get_by_id('users', user_id)
+        socketio.emit('user_status_changed', format_user_dict(updated), namespace='/')
     
     room = f'dm_channel_{channel_id}'
     user_room = f'user_{user_id}'
@@ -1156,7 +1123,6 @@ def on_call_request(data):
     print(f'[CALL] User {user_id} calling user {to_user_id}, type: {call_type}')
     print(f'[CALL] Offer present: {offer is not None}')
     
-    # Отправляем запрос на звонок получателю
     user_room = f'user_{to_user_id}'
     print(f'[CALL] Sending call_incoming to room: {user_room}')
     
@@ -1249,8 +1215,6 @@ def on_call_ice_candidate(data):
             'candidate': candidate
         }, room=user_room)
 
-# Для production используем gunicorn через Procfile
-# Для локальной разработки запускаем через if __name__ == '__main__'
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     debug = os.environ.get('FLASK_ENV') == 'development'
