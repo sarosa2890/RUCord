@@ -254,18 +254,16 @@ if not os.path.exists(instance_path):
         instance_path = '/tmp'
 
 # Конфигурация нескольких баз данных
-# Используем pool_pre_ping и pool_recycle для eventlet
-db_uri_base = f'sqlite:///{os.path.join(instance_path, "{name}.db")}'
+# Добавляем check_same_thread=False для работы в многопоточной среде
 app.config['SQLALCHEMY_BINDS'] = {
     'users': f'sqlite:///{os.path.join(instance_path, "Users.db")}?check_same_thread=False',
     'groups': f'sqlite:///{os.path.join(instance_path, "Groups.db")}?check_same_thread=False',
     'chats': f'sqlite:///{os.path.join(instance_path, "Chats.db")}?check_same_thread=False'
 }
 
-# Настройки пула для eventlet
+# Настройки для работы с threading
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     'pool_pre_ping': True,
-    'pool_recycle': 300,
     'connect_args': {'check_same_thread': False}
 }
 
@@ -287,6 +285,22 @@ jwt = JWTManager(app)
 # Или можно использовать gevent, но threading проще
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', logger=True, engineio_logger=True)
 CORS(app)
+
+# Глобальный обработчик ошибок для логирования
+@app.errorhandler(Exception)
+def handle_exception(e):
+    import traceback
+    error_msg = str(e)
+    error_traceback = traceback.format_exc()
+    print(f"[ERROR] Unhandled exception: {error_msg}")
+    print(f"[ERROR] Traceback:\n{error_traceback}")
+    
+    # Возвращаем JSON ошибку для API запросов
+    if request.path.startswith('/api/'):
+        return jsonify({'error': f'Server error: {error_msg}'}), 500
+    
+    # Для остальных запросов возвращаем стандартную страницу ошибки
+    return f"Internal Server Error: {error_msg}", 500
 
 # Создание таблиц во всех базах данных
 try:
@@ -376,22 +390,37 @@ def register():
 @app.route('/api/login', methods=['POST'])
 def login():
     try:
+        print("[LOGIN] Login request received")
         data = request.get_json()
+        print(f"[LOGIN] Request data: {data}")
+        
         if not data:
+            print("[LOGIN] No JSON data")
             return jsonify({'error': 'Invalid JSON'}), 400
             
         username = data.get('username')
         password = data.get('password')
         
         if not username or not password:
+            print("[LOGIN] Missing username or password")
             return jsonify({'error': 'Имя пользователя и пароль обязательны'}), 400
         
+        print(f"[LOGIN] Querying user: {username}")
         user = User.query.filter_by(username=username).first()
+        print(f"[LOGIN] User found: {user is not None}")
         
-        if not user or not user.check_password(password):
+        if not user:
+            print(f"[LOGIN] User not found: {username}")
             return jsonify({'error': 'Неверное имя пользователя или пароль'}), 401
         
+        print("[LOGIN] Checking password")
+        if not user.check_password(password):
+            print("[LOGIN] Invalid password")
+            return jsonify({'error': 'Неверное имя пользователя или пароль'}), 401
+        
+        print("[LOGIN] Creating access token")
         access_token = create_access_token(identity=user.id)
+        print("[LOGIN] Login successful")
         return jsonify({
             'token': access_token,
             'user': user.to_dict()
@@ -399,8 +428,9 @@ def login():
     except Exception as e:
         import traceback
         error_msg = str(e)
-        traceback.print_exc()
+        error_traceback = traceback.format_exc()
         print(f"[ERROR] Login error: {error_msg}")
+        print(f"[ERROR] Traceback:\n{error_traceback}")
         return jsonify({'error': f'Server error: {error_msg}'}), 500
 
 @app.route('/api/me', methods=['GET'])
